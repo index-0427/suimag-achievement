@@ -9,17 +9,51 @@ local function isInteger(value)
 end
 
 assert(isInteger(Config.StatisticsRefreshMinutes) and Config.StatisticsRefreshMinutes > 0,
-    'StatisticsRefreshMinutes must be a positive integer')
+    'config.lua: StatisticsRefreshMinutes must be a positive integer')
 
-for _, definition in ipairs(Config.Achievements) do
-    assert(type(definition.id) == 'string' and definition.id:match('^[%w_%-]+$'), 'Invalid achievement id')
-    assert(not definitions[definition.id], 'Duplicate achievement id: ' .. definition.id)
-    assert(isInteger(definition.target) and definition.target > 0, 'Invalid achievement target')
-    assert(type(definition.name) == 'string' and type(definition.description) == 'string', 'Invalid achievement text')
-    assert(type(definition.title) == 'string' and definition.title ~= ''
-        and not definition.title:find('[~\r\n]'), 'Invalid title (no GTA formatting codes or line breaks)')
-    assert(definition.auto == nil or definition.auto == 'join' or definition.auto == 'playtime', 'Invalid auto type')
-    definitions[definition.id] = definition
+local achievementList, locations, files = {}, {}, {}
+local directory, directoryError = io.readdir('@' .. resourceName .. '/achievements')
+assert(directory, 'achievements/: ' .. tostring(directoryError or 'could not read directory'))
+for filename in directory:lines() do
+    if filename:match('%.lua$') then files[#files + 1] = filename end
+end
+directory:close()
+table.sort(files)
+
+for _, filename in ipairs(files) do
+    local path = 'achievements/' .. filename
+    local content = assert(LoadResourceFile(resourceName, path), path .. ': could not read file')
+    -- Definition files return data without access to the resource's mutable globals.
+    local chunk, syntaxError = load(content, '@' .. path, 't', {})
+    assert(chunk, syntaxError)
+    local entries = chunk()
+    assert(type(entries) == 'table', path .. ': return an array of definitions')
+    local count = 0
+    for index in pairs(entries) do
+        assert(isInteger(index) and index >= 1, path .. ': use an array of definitions, not named keys')
+        count = count + 1
+    end
+
+    for index = 1, count do
+        local definition = entries[index]
+        local location = ('%s #%d: '):format(path, index)
+        assert(type(definition) == 'table', location .. 'expected an achievement table (no gaps in the list)')
+        assert(type(definition.id) == 'string' and definition.id:match('^[%w_%-]+$'),
+            location .. 'id must contain only letters, digits, underscores or hyphens')
+        location = ('%s #%d (%s): '):format(path, index, definition.id)
+        assert(not definitions[definition.id], location .. 'duplicate id; first defined at ' .. (locations[definition.id] or ''))
+        assert(isInteger(definition.target) and definition.target > 0, location .. 'target must be a positive integer')
+        assert(type(definition.name) == 'string' and definition.name ~= '', location .. 'name must be a non-empty string')
+        assert(type(definition.description) == 'string', location .. 'description must be a string')
+        assert(type(definition.title) == 'string' and definition.title ~= ''
+            and not definition.title:find('[~\r\n]'), location .. 'title must be non-empty, without ~ or line breaks')
+        assert(definition.unit == nil or type(definition.unit) == 'string', location .. 'unit must be a string')
+        assert(definition.auto == nil or definition.auto == 'join' or definition.auto == 'playtime',
+            location .. 'auto must be omitted, join or playtime')
+        definitions[definition.id] = definition
+        locations[definition.id] = ('%s #%d'):format(path, index)
+        achievementList[#achievementList + 1] = definition
+    end
 end
 
 local function publishTitle(playerId, session)
@@ -51,7 +85,7 @@ local function accountTime(session)
     local seconds = math.max(0, math.floor((now - session.lastTick) / 1000))
     session.lastTick = now
     session.data.playSeconds = session.data.playSeconds + seconds
-    for _, definition in ipairs(Config.Achievements) do
+    for _, definition in ipairs(achievementList) do
         if definition.auto == 'playtime' then
             setProgress(session, definition, math.floor(session.data.playSeconds / 60))
         end
@@ -103,7 +137,7 @@ local function getSession(playerId)
 
     session = { citizenid = citizenid, data = data, lastTick = GetGameTimer() }
     sessions[playerId] = session
-    for _, definition in ipairs(Config.Achievements) do
+    for _, definition in ipairs(achievementList) do
         if definition.auto == 'join' then setProgress(session, definition, definition.target) end
     end
     local selected = definitions[data.selected]
@@ -120,7 +154,7 @@ local function collectStatistics()
     local players = MySQL.query.await('SELECT citizenid FROM players')
     assert(type(players) == 'table', 'Could not read the Qbox player list')
     local counts = {}
-    for _, definition in ipairs(Config.Achievements) do counts[definition.id] = 0 end
+    for _, definition in ipairs(achievementList) do counts[definition.id] = 0 end
 
     for index, player in ipairs(players) do
         local encoded = GetResourceKvpString('character:' .. player.citizenid)
@@ -128,7 +162,7 @@ local function collectStatistics()
             local data = json.decode(encoded)
             assert(type(data) == 'table' and type(data.progress) == 'table',
                 'Invalid saved progress for ' .. player.citizenid)
-            for _, definition in ipairs(Config.Achievements) do
+            for _, definition in ipairs(achievementList) do
                 local record = data.progress[definition.id]
                 if record ~= nil then
                     assert(type(record) == 'table' and isInteger(record.value),
@@ -148,7 +182,7 @@ end
 
 local function snapshot(session)
     local achievements = {}
-    for _, definition in ipairs(Config.Achievements) do
+    for _, definition in ipairs(achievementList) do
         local record = session.data.progress[definition.id] or { value = 0 }
         achievements[#achievements + 1] = {
             id = definition.id,

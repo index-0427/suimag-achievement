@@ -39,36 +39,31 @@ ensure suimag-achievement
 
 ## 実績の追加
 
-`config.lua` の `Config.Achievements` に定義を追加します。順番がアプリの表示順です。
+**`achievements/` 直下に、作者ごとの `.lua` ファイルを追加します。** 1ファイルにその人が作った実績を複数まとめられます。起動時に全ファイルを自動で読み込むため、追加のたびに `fxmanifest.lua` や本体・UIを編集する必要はありません。
 
-```lua
-{
-    id = 'delivery_10',
-    name = '配達の達人',
-    description = '配達を10回完了する。',
-    title = '配達人',
-    target = 10,
-    unit = '回',
-},
+```text
+achievements/
+├── 00_default.lua   # 同梱の標準3実績
+├── 10_author_a.lua  # Aさんの実績一式（追加例）
+└── 20_author_b.lua  # Bさんの実績一式（追加例）
 ```
 
-`auto = 'join'` は導入後の初ログインで達成、`auto = 'playtime'` はキャラクターで接続していた合計時間（分）を数えます。離席時間も含みます。オフライン中・キャラクター選択中は加算しません。導入前の時間は遡って集計しません。
+各ファイルは `return { ... }` で定義の一覧を返します。表示順はファイル名の昇順、その中の記載順です。ファイル間でも実績IDの重複を検出し、両方のファイル名・位置をエラーに表示します。
 
-`auto` のない実績は、達成条件を検証した**サーバースクリプト**から呼び出してください。
+- 初ログイン・累計接続時間の実績: 定義ファイルの追加だけで動きます。
+- 配達回数などの実績: 定義ファイルを追加し、条件を確認した外部リソースのサーバー処理から `AddProgress` / `Unlock` を呼びます。
 
-```lua
--- 配達完了をサーバー側で確認した処理の中で実行
-local ok, reason = exports['suimag-achievement']:AddProgress(source, 'delivery_10', 1)
+ファイルの完成例、各項目の説明、外部ジョブとの連携、動作確認は **[実績追加ガイド](docs/adding-achievements.md)** を参照してください。
 
--- 特定の実績を一度に達成させる
-local ok, reason = exports['suimag-achievement']:Unlock(source, 'delivery_10')
-```
+| ファイル | 用途 |
+| --- | --- |
+| `achievements/*.lua` | 作者別の実績定義。追加担当者が編集する場所 |
+| `config.lua` | 全体設定（取得率の集計間隔） |
+| `server/main.lua` | 定義の読み込み・検証、保存・自動加算・取得率・サーバー exports |
+| `client/main.lua` / `ui/` | スマホアプリと称号表示 |
+| `tests/` | ローカル回帰テスト・UIプレビュー |
 
-対象はオンライン中のキャラクターです。`AddProgress` の加算値は正の整数（省略時1）、進捗は目標値で止まります。同じ実績を再達成しても達成日は変わりません。成功時は `true`、失敗時は `false, reason` を返します。理由は `unknown_achievement` / `invalid_amount` / `player_unavailable` です。
-
-クライアントから実績を付与するネットイベントはありません。外部スクリプトもクライアントから送られた達成申告をそのまま exports に渡さず、条件と対象をサーバーで確認してください。
-
-設定変更後はこのリソースを再起動してください。公開済みの `id` と `target` は原則固定にし、新しい条件は別IDで追加します。削除したIDの保存記録は残りますが、一覧や称号には使用しません。
+旧版の `config.lua` または単一の `achievements.lua` に独自実績がある場合は、更新前に退避し、`achievements/` 内の作者別ファイルへ同じ `id` / `target` で移してください。`Config.Achievements = { ... }` は `return { ... }` に変更します。旧形式のファイルは自動で統合されません。標準3実績と保存形式は維持しており、同じリソース名を使えば保存済みの進捗・称号を引き継げます。
 
 ## 実績取得率
 
@@ -92,10 +87,10 @@ local ok, reason = exports['suimag-achievement']:Unlock(source, 'delivery_10')
 Lua 5.4 と Node.js で実行できます。テストに追加パッケージは不要です。
 
 ```bash
-lua tests/server_spec.lua
-lua tests/client_spec.lua
-node --check ui/app.js
+node tests/run.js
 ```
+
+`node tests/run.js` は `achievements/` 内の全Luaファイルを対象に、サーバー・クライアントのテストとUIの構文チェックを実行します。回帰テストは標準3実績を残した構成で利用してください。
 
 UI は `python3 -m http.server 8765 --bind 127.0.0.1` をリポジトリ直下で実行し、`http://127.0.0.1:8765/tests/preview.html` でモック表示できます。プレビューとテストは FiveM に配信するファイルに含めていません。ライト／ダーク、称号選択／解除、エラー、空の一覧を確認できます。
 
